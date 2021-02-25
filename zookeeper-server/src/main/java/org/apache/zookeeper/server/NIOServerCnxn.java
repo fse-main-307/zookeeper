@@ -49,17 +49,23 @@ import org.apache.zookeeper.server.command.SetTraceMaskCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.checkerframework.checker.objectconstruction.qual.*;
+import org.checkerframework.checker.calledmethods.qual.*;
+import org.checkerframework.checker.mustcall.qual.*;
+
+
 /**
  * This class handles communication with clients using NIO. There is one per
  * client, but only one thread doing the communication.
  */
+@MustCall("close")
 public class NIOServerCnxn extends ServerCnxn {
 
     private static final Logger LOG = LoggerFactory.getLogger(NIOServerCnxn.class);
 
     private final NIOServerCnxnFactory factory;
 
-    private final SocketChannel sock;
+    private final @Owning SocketChannel sock;
 
     private final SelectorThread selectorThread;
 
@@ -86,7 +92,7 @@ public class NIOServerCnxn extends ServerCnxn {
      */
     private final boolean clientTcpKeepAlive = Boolean.getBoolean("zookeeper.clientTcpKeepAlive");
 
-    public NIOServerCnxn(ZooKeeperServer zk, SocketChannel sock, SelectionKey sk, NIOServerCnxnFactory factory, SelectorThread selectorThread) throws IOException {
+    public NIOServerCnxn(ZooKeeperServer zk, @Owning SocketChannel sock, SelectionKey sk, NIOServerCnxnFactory factory, SelectorThread selectorThread) throws IOException {
         super(zk);
         this.sock = sock;
         this.sk = sk;
@@ -470,6 +476,7 @@ public class NIOServerCnxn extends ServerCnxn {
 
     }
     /** Return if four letter word found and responded to, otw false **/
+    @SuppressWarnings("objectconstruction:required.method.not.called") // FP: MCC with owning field
     private boolean checkFourLetterWord(final SelectionKey k, final int len) throws IOException {
         // We take advantage of the limited size of the length to look
         // for cmds. They are all 4-bytes which fits inside of an int
@@ -577,11 +584,14 @@ public class NIOServerCnxn extends ServerCnxn {
      * Close the cnxn and remove it from the factory cnxns list.
      */
     @Override
+    @EnsuresCalledMethods(value="sock", methods="close")
     public void close(DisconnectReason reason) {
         disconnectReason = reason;
         close();
     }
 
+    @EnsuresCalledMethods(value="sock", methods="close")
+    @SuppressWarnings("objectconstruction:contracts.postcondition.not.satisfied") // FP: not sure why this doesn't verify
     private void close() {
         setStale();
         if (!factory.removeCnxn(this)) {
@@ -607,6 +617,8 @@ public class NIOServerCnxn extends ServerCnxn {
     /**
      * Close resources associated with the sock of this cnxn.
      */
+    @EnsuresCalledMethods(value="sock", methods="close")
+    @SuppressWarnings({"objectconstruction:contracts.postcondition.not.satisfied", "objectconstruction:required.method.not.called"}) // FP: not sure why this doesn't verify :: FP: MCC with owning field
     private void closeSock() {
         if (!sock.isOpen()) {
             return;
@@ -627,6 +639,8 @@ public class NIOServerCnxn extends ServerCnxn {
     /**
      * Close resources associated with a sock.
      */
+    @SuppressWarnings("objectconstruction:contracts.postcondition.not.satisfied") // FP: not sure why this doesn't verify
+    @EnsuresCalledMethods(value="#1", methods="close")
     public static void closeSock(SocketChannel sock) {
         if (!sock.isOpen()) {
             return;

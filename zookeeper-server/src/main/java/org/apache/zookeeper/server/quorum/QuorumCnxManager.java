@@ -71,9 +71,13 @@ import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
 import org.apache.zookeeper.server.util.ConfigUtils;
 import org.apache.zookeeper.util.CircularBlockingQueue;
 import org.apache.zookeeper.util.ServiceUtils;
+import org.checkerframework.checker.objectconstruction.qual.Owning;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.checkerframework.checker.objectconstruction.qual.*;
+import org.checkerframework.checker.calledmethods.qual.*;
+import org.checkerframework.checker.mustcall.qual.*;
 
 /**
  * This class implements a connection manager for leader election using TCP. It
@@ -370,6 +374,7 @@ public class QuorumCnxManager {
      * If this server has initiated the connection, then it gives up on the
      * connection if it loses challenge. Otherwise, it keeps the connection.
      */
+    @SuppressWarnings("objectconstruction:required.method.not.called") // FP: SOCKET_FACTORY.get() is an unconnected socket, but we don't have a way to specify that given that it's a Supplier.
     public void initiateConnection(final MultipleAddresses electionAddr, final Long sid) {
         Socket sock = null;
         try {
@@ -401,7 +406,6 @@ public class QuorumCnxManager {
             closeSocket(sock);
             return;
         }
-
         try {
             startConnection(sock, sid);
         } catch (IOException e) {
@@ -462,6 +466,7 @@ public class QuorumCnxManager {
 
     }
 
+    @EnsuresCalledMethodsIf(expression="#1", result=false, methods="close")
     private boolean startConnection(Socket sock, Long sid) throws IOException {
         DataOutputStream dout = null;
         DataInputStream din = null;
@@ -545,7 +550,7 @@ public class QuorumCnxManager {
      * possible long value to lose the challenge.
      *
      */
-    public void receiveConnection(final Socket sock) {
+    public void receiveConnection(final @Owning Socket sock) {
         DataInputStream din = null;
         try {
             din = new DataInputStream(new BufferedInputStream(sock.getInputStream()));
@@ -563,7 +568,7 @@ public class QuorumCnxManager {
      * Server receives a connection request and handles it asynchronously via
      * separate thread.
      */
-    public void receiveConnectionAsync(final Socket sock) {
+    public void receiveConnectionAsync(final @Owning Socket sock) {
         try {
             LOG.debug("Async handling of connection request received from: {}", sock.getRemoteSocketAddress());
             connectionExecutor.execute(new QuorumConnectionReceiverThread(sock));
@@ -581,7 +586,8 @@ public class QuorumCnxManager {
     private class QuorumConnectionReceiverThread extends ZooKeeperThread {
 
         private final Socket sock;
-        QuorumConnectionReceiverThread(final Socket sock) {
+        @SuppressWarnings("objectconstruction:required.method.not.called") // FP: this is a thread, which will definitely have run() called upon it. This method takes the socket and puts it in a field temporarily; when run is called, sock is passed to receiveConnection(), which takes ownership.
+        QuorumConnectionReceiverThread(final @Owning Socket sock) {
             super("QuorumConnectionReceiverThread-" + sock.getRemoteSocketAddress());
             this.sock = sock;
         }
@@ -593,7 +599,8 @@ public class QuorumCnxManager {
 
     }
 
-    private void handleConnection(Socket sock, DataInputStream din) throws IOException {
+    @SuppressWarnings("objectconstruction:required.method.not.called") // TP: see below
+    private void handleConnection(@Owning Socket sock, DataInputStream din) throws IOException {
         Long sid = null, protocolVersion = null;
         MultipleAddresses electionAddr = null;
 
@@ -632,6 +639,8 @@ public class QuorumCnxManager {
         }
 
         // do authenticating learner
+        // TP: the rest of this method is careful to close the socket on exceptional paths, but this authenticate method can also throw
+        // an exception. In that case, the socket is not closed - this is outside a try block.
         authServer.authenticate(sock, din);
         //If wins the challenge, then close the new connection.
         if (sid < self.getId()) {
@@ -861,6 +870,7 @@ public class QuorumCnxManager {
      * @param sock
      *            Reference to socket
      */
+    @EnsuresCalledMethods(value="#1", methods="close")
     private void closeSocket(Socket sock) {
         if (sock == null) {
             return;
@@ -1009,7 +1019,7 @@ public class QuorumCnxManager {
         }
 
         class ListenerHandler implements Runnable, Closeable {
-            private ServerSocket serverSocket;
+            private @Owning ServerSocket serverSocket;
             private InetSocketAddress address;
             private boolean portUnification;
             private boolean sslQuorum;
@@ -1027,6 +1037,7 @@ public class QuorumCnxManager {
              * Sleeps on acceptConnections().
              */
             @Override
+            @ResetMustCall("this")
             public void run() {
                 try {
                     Thread.currentThread().setName("ListenerHandler-" + address);
@@ -1045,6 +1056,7 @@ public class QuorumCnxManager {
             }
 
             @Override
+            @EnsuresCalledMethods(value="this.serverSocket", methods="close")
             public synchronized void close() throws IOException {
                 if (serverSocket != null && !serverSocket.isClosed()) {
                     LOG.debug("Trying to close listeners: {}", serverSocket);
@@ -1055,6 +1067,8 @@ public class QuorumCnxManager {
             /**
              * Sleeps on accept().
              */
+            @SuppressWarnings("objectconstruction:required.method.not.called") // FP: this method is private, and only called on new instances that don't have a nonnull ServerSocket. The loop in which serverSocket is assigned is safe, because exceptions are caught and close() is called before the loop goes around again.
+            @ResetMustCall("this")
             private void acceptConnections() {
                 int numRetries = 0;
                 Socket client = null;
@@ -1144,10 +1158,11 @@ public class QuorumCnxManager {
      * soon as there is one available. If connection breaks, then opens a new
      * one.
      */
+    @MustCall("finish")
     class SendWorker extends ZooKeeperThread {
 
         Long sid;
-        Socket sock;
+        @Owning Socket sock;
         RecvWorker recvWorker;
         volatile boolean running = true;
         DataOutputStream dout;
@@ -1162,7 +1177,8 @@ public class QuorumCnxManager {
          * @param sid
          *            Server identifier of remote peer
          */
-        SendWorker(Socket sock, Long sid) {
+        @SuppressWarnings({"objectconstruction:missing.reset.mustcall", "objectconstruction:required.method.not.called"}) // FP: this is a constructor, but our analysis is treating it as an instance method
+        SendWorker(@Owning Socket sock, Long sid) {
             super("SendWorker:" + sid);
             this.sid = sid;
             this.sock = sock;
@@ -1190,6 +1206,8 @@ public class QuorumCnxManager {
             return recvWorker;
         }
 
+        @SuppressWarnings("objectconstruction:contracts.postcondition.not.satisfied") // FP: closeSocket also has EnsuresCalledMethods, but apparently they don't chain? IDK, this should verify. Maybe a viewpoint adaptation problem?
+        @EnsuresCalledMethods(value="this.sock", methods="close")
         synchronized boolean finish() {
             LOG.debug("Calling SendWorker.finish for {}", sid);
 
@@ -1326,15 +1344,16 @@ public class QuorumCnxManager {
      * Thread to receive messages. Instance waits on a socket read. If the
      * channel breaks, then removes itself from the pool of receivers.
      */
+    @MustCall("run")
     class RecvWorker extends ZooKeeperThread {
 
         Long sid;
-        Socket sock;
+        final @Owning Socket sock;
         volatile boolean running = true;
         final DataInputStream din;
         final SendWorker sw;
 
-        RecvWorker(Socket sock, DataInputStream din, Long sid, SendWorker sw) {
+        RecvWorker(@Owning Socket sock, DataInputStream din, Long sid, SendWorker sw) {
             super("RecvWorker:" + sid);
             this.sid = sid;
             this.sock = sock;
@@ -1371,6 +1390,7 @@ public class QuorumCnxManager {
         }
 
         @Override
+        @EnsuresCalledMethods(value="sock", methods="close")
         public void run() {
             threadCnt.incrementAndGet();
             try {

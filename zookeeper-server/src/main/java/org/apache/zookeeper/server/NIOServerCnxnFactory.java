@@ -41,6 +41,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.checkerframework.checker.objectconstruction.qual.*;
+import org.checkerframework.checker.calledmethods.qual.*;
+import org.checkerframework.checker.mustcall.qual.*;
+
 /**
  * NIOServerCnxnFactory implements a multi-threaded ServerCnxnFactory using
  * NIO non-blocking socket calls. Communication between threads is handled via
@@ -102,9 +106,10 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
      * of code shared by the AcceptThread (which selects on the listen socket)
      * and SelectorThread (which selects on client connections) classes.
      */
+    @InheritableMustCall("closeSelector")
     private abstract class AbstractSelectThread extends ZooKeeperThread {
 
-        protected final Selector selector;
+        protected final @Owning Selector selector;
 
         public AbstractSelectThread(String name) throws IOException {
             super(name);
@@ -113,6 +118,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
             this.selector = Selector.open();
         }
 
+        @SuppressWarnings("objectconstruction:required.method.not.called") // FP: I'm not sure why we warn here. selector is an owning field, and closing it is handled elsewhere.
         public void wakeupSelector() {
             selector.wakeup();
         }
@@ -122,6 +128,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
          * exit and no operation is going to be performed on the Selector or
          * SelectionKey
          */
+        @EnsuresCalledMethods(value="this.selector", methods="close")
         protected void closeSelector() {
             try {
                 selector.close();
@@ -140,6 +147,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
             }
         }
 
+        @EnsuresCalledMethods(value="#1", methods="close")
         protected void fastCloseSock(SocketChannel sc) {
             if (sc != null) {
                 try {
@@ -257,6 +265,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
          *
          * @return whether was able to accept a connection or not
          */
+        @SuppressWarnings("objectconstruction:required.method.not.called") // FP: sc will either be passed to addAcceptedConnection, which will return true if it takes ownership, or an exception will be thrown and the catch block will close it. The use of exceptional control flow and our inability to model a method that takes ownership only if it returns true prevent us from verifying this.
         private boolean doAccept() {
             boolean accepted = false;
             SocketChannel sc = null;
@@ -450,6 +459,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
          * Iterate over the queue of accepted connections that have been
          * assigned to this thread but not yet placed on the selector.
          */
+        @SuppressWarnings("objectconstruction:required.method.not.called") // FP: each value of accepted is either: 1) based to createConnection, which takes ownership, or 2) closed by fastCloseSock. I'm not sure why this doesn't verify with the message "regular method exit"; I think there must be some imprecision in the CFG.
         private void processAcceptedConnections() {
             SocketChannel accepted;
             while (!stopped && (accepted = acceptedQueue.poll()) != null) {
@@ -571,7 +581,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
 
     }
 
-    ServerSocketChannel ss;
+    @Owning ServerSocketChannel ss;
 
     /**
      * We use this buffer to do efficient socket I/O. Because I/O is handled
@@ -620,6 +630,8 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
     private final Set<SelectorThread> selectorThreads = new HashSet<SelectorThread>();
 
     @Override
+    @SuppressWarnings({"objectconstruction:required.method.not.called", "objectconstruction:reset.not.owning"}) // FP: even though ss is bound before the call to configureBlocking, which could throw an exception, this method rethrows that exception, where it can be caught by the caller. That caller is then responsible for closing ss, which has already been assigned into its field - so no reference to it is lost.
+    @ResetMustCall("this")
     public void configure(InetSocketAddress addr, int maxcc, int backlog, boolean secure) throws IOException {
         if (secure) {
             throw new UnsupportedOperationException("SSL isn't supported in NIOServerCnxn");
@@ -671,6 +683,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
         acceptThread = new AcceptThread(ss, addr, selectorThreads);
     }
 
+    @EnsuresCalledMethods(value="#1", methods="close")
     private void tryClose(ServerSocketChannel s) {
         try {
             s.close();
@@ -680,6 +693,8 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
     }
 
     @Override
+    @ResetMustCall("this")
+    @SuppressWarnings({"objectconstruction:required.method.not.called", "objectconstruction:reset.not.owning"}) // FP: ss is bound before configureBlocking, which can throw an exception, is called. If configureBlocking does throw an exception, though, it is caught - so the caller of reconfigure() will still be able to safely close out this, as they should.
     public void reconfigure(InetSocketAddress addr) {
         ServerSocketChannel oldSS = ss;
         try {
@@ -823,7 +838,7 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
         touchCnxn(cnxn);
     }
 
-    protected NIOServerCnxn createConnection(SocketChannel sock, SelectionKey sk, SelectorThread selectorThread) throws IOException {
+    protected NIOServerCnxn createConnection(@Owning SocketChannel sock, SelectionKey sk, SelectorThread selectorThread) throws IOException {
         return new NIOServerCnxn(zkServer, sock, sk, this, selectorThread);
     }
 

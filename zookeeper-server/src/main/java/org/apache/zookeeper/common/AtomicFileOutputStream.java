@@ -26,6 +26,8 @@ import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.checkerframework.checker.mustcall.qual.MustCallChoice;
+
 /*
  * This code is originally from HDFS, see the similarly named files there
  * in case of bug fixing, history, etc...
@@ -73,6 +75,7 @@ public class AtomicFileOutputStream extends FilterOutputStream {
     }
 
     @Override
+    @SuppressWarnings("objectconstruction:required.method.not.called") // FP: even when sync() throws an exception, this code definitely closes out. However, we can't prove that because it's controlled by the success boolean.
     public void close() throws IOException {
         boolean triedToClose = false, success = false;
         try {
